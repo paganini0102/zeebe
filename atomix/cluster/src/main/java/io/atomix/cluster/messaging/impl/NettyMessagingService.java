@@ -19,7 +19,6 @@ package io.atomix.cluster.messaging.impl;
 import static io.atomix.utils.concurrent.Threads.namedThreads;
 
 import com.google.common.base.Throwables;
-import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 import com.google.common.util.concurrent.MoreExecutors;
 import io.atomix.cluster.messaging.ManagedMessagingService;
@@ -52,6 +51,8 @@ import io.netty.channel.socket.nio.NioSocketChannel;
 import io.netty.util.concurrent.Future;
 import java.net.InetAddress;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
@@ -69,6 +70,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
 import java.util.function.Function;
+import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -77,6 +79,7 @@ public class NettyMessagingService implements ManagedMessagingService {
 
   private final Logger log = LoggerFactory.getLogger(getClass());
   private final Address returnAddress;
+  private final Collection<Address> bindingAddress = new ArrayList<>();
   private final int preamble;
   private final MessagingConfig config;
   private final ProtocolVersion protocolVersion;
@@ -101,20 +104,35 @@ public class NettyMessagingService implements ManagedMessagingService {
 
   NettyMessagingService(
       final String cluster,
-      final Address address,
+      final Address advertisedAddress,
       final MessagingConfig config,
       final ProtocolVersion protocolVersion) {
     preamble = cluster.hashCode();
-    returnAddress = address;
+    returnAddress = advertisedAddress;
     this.config = config;
     this.protocolVersion = protocolVersion;
     openFutures = new CopyOnWriteArrayList<>();
     channelPool = new ChannelPool(this::openChannel, config.getConnectionPoolSize());
+    final int port = config.getPort() != null ? config.getPort() : returnAddress.port();
+    if (config.getInterfaces().isEmpty()) {
+      bindingAddress.add(Address.from(returnAddress.host(), port));
+    } else {
+      final var addresses =
+          config.getInterfaces().stream()
+              .map(iface -> Address.from(iface, port))
+              .collect(Collectors.toList());
+      bindingAddress.addAll(addresses);
+    }
   }
 
   @Override
   public Address address() {
     return returnAddress;
+  }
+
+  @Override
+  public Collection<Address> bindingAddress() {
+    return bindingAddress;
   }
 
   @Override
@@ -574,12 +592,9 @@ public class NettyMessagingService implements ManagedMessagingService {
    */
   private CompletableFuture<Void> bind(final ServerBootstrap bootstrap) {
     final CompletableFuture<Void> future = new CompletableFuture<>();
-    final int port = config.getPort() != null ? config.getPort() : returnAddress.port();
-    if (config.getInterfaces().isEmpty()) {
-      bind(bootstrap, Lists.newArrayList("0.0.0.0").iterator(), port, future);
-    } else {
-      bind(bootstrap, config.getInterfaces().iterator(), port, future);
-    }
+
+    bind(bootstrap, bindingAddress.iterator(), future);
+
     return future;
   }
 
@@ -587,33 +602,28 @@ public class NettyMessagingService implements ManagedMessagingService {
    * Recursively binds the given bootstrap to the given interfaces.
    *
    * @param bootstrap the bootstrap to bind
-   * @param ifaces an iterator of interfaces to which to bind
-   * @param port the port to which to bind
+   * @param addressIterator an iterator of Addresses to which to bind
    * @param future the future to completed once the bootstrap has been bound to all provided
    *     interfaces
    */
   private void bind(
       final ServerBootstrap bootstrap,
-      final Iterator<String> ifaces,
-      final int port,
+      final Iterator<Address> addressIterator,
       final CompletableFuture<Void> future) {
-    if (ifaces.hasNext()) {
-      final String iface = ifaces.next();
+    if (addressIterator.hasNext()) {
+      final Address address = addressIterator.next();
       bootstrap
-          .bind(iface, port)
+          .bind(address.host(), address.port())
           .addListener(
               (ChannelFutureListener)
                   f -> {
                     if (f.isSuccess()) {
-                      log.info("TCP server listening for connections on {}:{}", iface, port);
+                      log.info("TCP server listening for connections on {}", address);
                       serverChannel = f.channel();
-                      bind(bootstrap, ifaces, port, future);
+                      bind(bootstrap, addressIterator, future);
                     } else {
                       log.warn(
-                          "Failed to bind TCP server to port {}:{} due to {}",
-                          iface,
-                          port,
-                          f.cause());
+                          "Failed to bind TCP server to port {} due to {}", address, f.cause());
                       future.completeExceptionally(f.cause());
                     }
                   });
