@@ -26,8 +26,6 @@ class TransactionalColumnFamily<
     implements ColumnFamily<KeyType, ValueType> {
 
   private final ZeebeTransactionDb<ColumnFamilyNames> transactionDb;
-  private final long handle;
-
   private final DbContext context;
 
   private final DbCompositeKey<DbLong, KeyType> compositeKey;
@@ -42,7 +40,6 @@ class TransactionalColumnFamily<
       final KeyType keyInstance,
       final ValueType valueInstance) {
     this.transactionDb = transactionDb;
-    handle = this.transactionDb.getColumnFamilyHandle();
     this.context = context;
     this.keyInstance = keyInstance;
     this.valueInstance = valueInstance;
@@ -58,7 +55,7 @@ class TransactionalColumnFamily<
 
   @Override
   public void put(final DbContext context, final KeyType key, final ValueType value) {
-    transactionDb.put(handle, context, compositeKey, value);
+    transactionDb.put(context, compositeKey, value);
   }
 
   @Override
@@ -68,7 +65,7 @@ class TransactionalColumnFamily<
 
   @Override
   public ValueType get(final DbContext context, final KeyType key, final ValueType value) {
-    final DirectBuffer valueBuffer = transactionDb.get(handle, context, compositeKey);
+    final DirectBuffer valueBuffer = transactionDb.get(context, compositeKey);
     if (valueBuffer != null) {
 
       value.wrap(valueBuffer, 0, valueBuffer.capacity());
@@ -98,7 +95,7 @@ class TransactionalColumnFamily<
       final KeyValuePairVisitor<KeyType, ValueType> visitor,
       final KeyType key,
       final ValueType value) {
-    transactionDb.whileEqualPrefix(columnFamilyKey, handle, context, key, value, visitor);
+    transactionDb.whileEqualPrefix(columnFamilyKey, context, key, value, visitor);
   }
 
   @Override
@@ -120,7 +117,7 @@ class TransactionalColumnFamily<
 
   @Override
   public void delete(final DbContext context, final KeyType key) {
-    transactionDb.delete(handle, context, compositeKey);
+    transactionDb.delete(context, compositeKey);
   }
 
   @Override
@@ -138,7 +135,6 @@ class TransactionalColumnFamily<
     final AtomicBoolean isEmpty = new AtomicBoolean(true);
     transactionDb.whileEqualPrefix(
         columnFamilyKey,
-        handle,
         context,
         keyInstance,
         valueInstance,
@@ -156,7 +152,6 @@ class TransactionalColumnFamily<
   public void forEach(final DbContext context, final Consumer<ValueType> consumer) {
     transactionDb.whileEqualPrefix(
         columnFamilyKey,
-        handle,
         context,
         keyInstance,
         valueInstance,
@@ -164,14 +159,12 @@ class TransactionalColumnFamily<
   }
 
   public void forEach(final DbContext context, final BiConsumer<KeyType, ValueType> consumer) {
-    transactionDb.whileEqualPrefix(
-        columnFamilyKey, handle, context, keyInstance, valueInstance, consumer);
+    transactionDb.whileEqualPrefix(columnFamilyKey, context, keyInstance, valueInstance, consumer);
   }
 
   public void whileTrue(
       final DbContext context, final KeyValuePairVisitor<KeyType, ValueType> visitor) {
-    transactionDb.whileEqualPrefix(
-        columnFamilyKey, handle, context, keyInstance, valueInstance, visitor);
+    transactionDb.whileEqualPrefix(columnFamilyKey, context, keyInstance, valueInstance, visitor);
   }
 
   public void whileEqualPrefix(
@@ -179,7 +172,7 @@ class TransactionalColumnFamily<
       final DbKey keyPrefix,
       final BiConsumer<KeyType, ValueType> visitor) {
     transactionDb.whileEqualPrefix(
-        columnFamilyKey, handle, context, keyPrefix, keyInstance, valueInstance, visitor);
+        columnFamilyKey, context, keyPrefix, keyInstance, valueInstance, visitor);
   }
 
   public void whileEqualPrefix(
@@ -187,10 +180,10 @@ class TransactionalColumnFamily<
       final DbKey keyPrefix,
       final KeyValuePairVisitor<KeyType, ValueType> visitor) {
     transactionDb.whileEqualPrefix(
-        columnFamilyKey, handle, context, keyPrefix, keyInstance, valueInstance, visitor);
+        columnFamilyKey, context, keyPrefix, keyInstance, valueInstance, visitor);
   }
 
   public boolean exists(final DbContext context, final KeyType key) {
-    return transactionDb.exists(handle, context, compositeKey);
+    return transactionDb.exists(context, compositeKey);
   }
 }

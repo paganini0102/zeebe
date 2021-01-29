@@ -51,12 +51,14 @@ public class ZeebeTransactionDb<ColumnFamilyNames extends Enum<ColumnFamilyNames
   private final ReadOptions defaultReadOptions;
   private final WriteOptions defaultWriteOptions;
   private final ColumnFamilyHandle defaultHandle;
+  private final long defaultNativeHandle;
 
   protected ZeebeTransactionDb(
       final ColumnFamilyHandle defaultHandle,
       final OptimisticTransactionDB optimisticTransactionDB,
       final List<AutoCloseable> closables) {
     this.defaultHandle = defaultHandle;
+    defaultNativeHandle = getNativeHandle(defaultHandle);
     this.optimisticTransactionDB = optimisticTransactionDB;
     this.closables = closables;
 
@@ -96,10 +98,6 @@ public class ZeebeTransactionDb<ColumnFamilyNames extends Enum<ColumnFamilyNames
     }
   }
 
-  long getColumnFamilyHandle() {
-    return getNativeHandle(defaultHandle);
-  }
-
   @Override
   public <KeyType extends DbKey, ValueType extends DbValue>
       ColumnFamily<KeyType, ValueType> createColumnFamily(
@@ -134,11 +132,7 @@ public class ZeebeTransactionDb<ColumnFamilyNames extends Enum<ColumnFamilyNames
   //////////////////////////// GET ///////////////////////////////////
   ////////////////////////////////////////////////////////////////////
 
-  protected void put(
-      final long columnFamilyHandle,
-      final DbContext context,
-      final DbKey key,
-      final DbValue value) {
+  protected void put(final DbContext context, final DbKey key, final DbValue value) {
     ensureInOpenTransaction(
         context,
         transaction -> {
@@ -146,7 +140,7 @@ public class ZeebeTransactionDb<ColumnFamilyNames extends Enum<ColumnFamilyNames
           context.writeValue(value);
 
           transaction.put(
-              columnFamilyHandle,
+              defaultNativeHandle,
               context.getKeyBufferArray(),
               key.getLength(),
               context.getValueBufferArray(),
@@ -160,21 +154,19 @@ public class ZeebeTransactionDb<ColumnFamilyNames extends Enum<ColumnFamilyNames
         () -> operation.run((ZeebeTransaction) context.getCurrentTransaction()));
   }
 
-  protected DirectBuffer get(
-      final long columnFamilyHandle, final DbContext context, final DbKey key) {
+  protected DirectBuffer get(final DbContext context, final DbKey key) {
     context.writeKey(key);
     final int keyLength = key.getLength();
-    return getValue(columnFamilyHandle, context, keyLength);
+    return getValue(context, keyLength);
   }
 
-  private DirectBuffer getValue(
-      final long columnFamilyHandle, final DbContext context, final int keyLength) {
+  private DirectBuffer getValue(final DbContext context, final int keyLength) {
     ensureInOpenTransaction(
         context,
         transaction -> {
           final byte[] value =
               transaction.get(
-                  columnFamilyHandle,
+                  defaultNativeHandle,
                   getNativeHandle(defaultReadOptions),
                   context.getKeyBufferArray(),
                   keyLength);
@@ -198,25 +190,24 @@ public class ZeebeTransactionDb<ColumnFamilyNames extends Enum<ColumnFamilyNames
   //////////////////////////// ITERATION /////////////////////////////
   ////////////////////////////////////////////////////////////////////
 
-  protected boolean exists(
-      final long columnFamilyHandle, final DbContext context, final DbKey key) {
+  protected boolean exists(final DbContext context, final DbKey key) {
     context.wrapValueView(new byte[0]);
     ensureInOpenTransaction(
         context,
         transaction -> {
           context.writeKey(key);
-          getValue(columnFamilyHandle, context, key.getLength());
+          getValue(context, key.getLength());
         });
     return !context.isValueViewEmpty();
   }
 
-  protected void delete(final long columnFamilyHandle, final DbContext context, final DbKey key) {
+  protected void delete(final DbContext context, final DbKey key) {
     context.writeKey(key);
 
     ensureInOpenTransaction(
         context,
         transaction ->
-            transaction.delete(columnFamilyHandle, context.getKeyBufferArray(), key.getLength()));
+            transaction.delete(defaultNativeHandle, context.getKeyBufferArray(), key.getLength()));
   }
 
   ////////////////////////////////////////////////////////////////////
@@ -229,7 +220,6 @@ public class ZeebeTransactionDb<ColumnFamilyNames extends Enum<ColumnFamilyNames
 
   protected <KeyType extends DbKey, ValueType extends DbValue> void whileEqualPrefix(
       final DbLong columnFamilyKey,
-      final long columnFamilyHandle,
       final DbContext context,
       final DbKey prefix,
       final KeyType keyInstance,
@@ -237,7 +227,6 @@ public class ZeebeTransactionDb<ColumnFamilyNames extends Enum<ColumnFamilyNames
       final BiConsumer<KeyType, ValueType> visitor) {
     whileEqualPrefix(
         columnFamilyKey,
-        columnFamilyHandle,
         context,
         prefix,
         keyInstance,
@@ -254,14 +243,12 @@ public class ZeebeTransactionDb<ColumnFamilyNames extends Enum<ColumnFamilyNames
    */
   protected <KeyType extends DbKey, ValueType extends DbValue> void whileEqualPrefix(
       final DbLong columnFamilyKey,
-      final long columnFamilyHandle,
       final DbContext context,
       final KeyType keyInstance,
       final ValueType valueInstance,
       final BiConsumer<KeyType, ValueType> visitor) {
     whileEqualPrefix(
         columnFamilyKey,
-        columnFamilyHandle,
         context,
         new DbNullKey(),
         keyInstance,
@@ -272,23 +259,18 @@ public class ZeebeTransactionDb<ColumnFamilyNames extends Enum<ColumnFamilyNames
         });
   }
 
-  // This method is used mainly from other iterator methods to iterate over column family entries,
-  // which are prefixed with column family key.
+  /**
+   * This method is used mainly from other iterator methods to iterate over column family entries,
+   * which are prefixed with column family key.
+   */
   protected <KeyType extends DbKey, ValueType extends DbValue> void whileEqualPrefix(
       final DbLong columnFamilyKey,
-      final long columnFamilyHandle,
       final DbContext context,
       final KeyType keyInstance,
       final ValueType valueInstance,
       final KeyValuePairVisitor<KeyType, ValueType> visitor) {
     whileEqualPrefix(
-        columnFamilyKey,
-        columnFamilyHandle,
-        context,
-        new DbNullKey(),
-        keyInstance,
-        valueInstance,
-        visitor);
+        columnFamilyKey, context, new DbNullKey(), keyInstance, valueInstance, visitor);
   }
 
   /**
@@ -302,7 +284,6 @@ public class ZeebeTransactionDb<ColumnFamilyNames extends Enum<ColumnFamilyNames
    */
   protected <KeyType extends DbKey, ValueType extends DbValue> void whileEqualPrefix(
       final DbLong columnFamilyKey,
-      final long columnFamilyHandle,
       final DbContext context,
       final DbKey prefix,
       final KeyType keyInstance,
@@ -365,14 +346,12 @@ public class ZeebeTransactionDb<ColumnFamilyNames extends Enum<ColumnFamilyNames
     return iteratorConsumer.visit(keyInstance, valueInstance);
   }
 
-  public boolean isEmpty(
-      final long columnFamilyKey, final long columnFamilyHandle, final DbContext context) {
+  public boolean isEmpty(final long columnFamilyKey, final DbContext context) {
     final var columnKey = new DbLong();
     columnKey.wrapLong(columnFamilyKey);
     final AtomicBoolean isEmpty = new AtomicBoolean(true);
     whileEqualPrefix(
         columnKey,
-        columnFamilyHandle,
         context,
         DbNullKey.INSTANCE,
         DbNil.INSTANCE,
@@ -385,7 +364,7 @@ public class ZeebeTransactionDb<ColumnFamilyNames extends Enum<ColumnFamilyNames
 
   @Override
   public boolean isEmpty(final ColumnFamilyNames columnFamilyName, final DbContext context) {
-    return isEmpty(columnFamilyName.ordinal(), getNativeHandle(defaultHandle), context);
+    return isEmpty(columnFamilyName.ordinal(), context);
   }
 
   @Override
@@ -415,10 +394,7 @@ public class ZeebeTransactionDb<ColumnFamilyNames extends Enum<ColumnFamilyNames
     void run(ZeebeTransaction transaction) throws Exception;
   }
 
-  /**
-   * This class is used only internally by #whileEqualPrefix to search for same column family
-   * prefix.
-   */
+  /** This class is used only internally by #isEmpty to search for same column family prefix. */
   private static final class DbNullKey implements DbKey {
 
     public static final DbNullKey INSTANCE = new DbNullKey();
