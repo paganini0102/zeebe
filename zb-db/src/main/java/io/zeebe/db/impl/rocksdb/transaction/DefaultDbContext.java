@@ -15,10 +15,11 @@ import io.zeebe.db.DbValue;
 import io.zeebe.db.TransactionOperation;
 import io.zeebe.db.ZeebeDbException;
 import io.zeebe.db.ZeebeDbTransaction;
+import io.zeebe.db.impl.ZeebeDbConstants;
 import io.zeebe.util.exception.RecoverableException;
 import java.util.ArrayDeque;
 import java.util.Queue;
-import java.util.function.Consumer;
+import java.util.function.ObjIntConsumer;
 import org.agrona.DirectBuffer;
 import org.agrona.ExpandableArrayBuffer;
 import org.agrona.concurrent.UnsafeBuffer;
@@ -42,6 +43,7 @@ public final class DefaultDbContext implements DbContext {
   private final DirectBuffer valueViewBuffer = new UnsafeBuffer(0, 0);
 
   private final Queue<ExpandableArrayBuffer> prefixKeyBuffers;
+  private int keyLength;
 
   DefaultDbContext(final ZeebeTransaction transaction) {
     this.transaction = transaction;
@@ -51,8 +53,16 @@ public final class DefaultDbContext implements DbContext {
   }
 
   @Override
-  public void writeKey(final DbKey key) {
-    key.write(keyBuffer, 0);
+  public void writeKey(final long keyPrefix, final DbKey key) {
+    keyLength = 0;
+    keyBuffer.putLong(0, keyPrefix, ZeebeDbConstants.ZB_DB_BYTE_ORDER);
+    keyLength += Long.BYTES;
+    key.write(keyBuffer, Long.BYTES);
+    keyLength += key.getLength();
+  }
+
+  public int getKeyLength() {
+    return keyLength;
   }
 
   @Override
@@ -110,14 +120,20 @@ public final class DefaultDbContext implements DbContext {
   }
 
   @Override
-  public void withPrefixKeyBuffer(final Consumer<ExpandableArrayBuffer> prefixKeyBufferConsumer) {
+  public void withPrefixKey(
+      final long keyPrefix, final DbKey key, final ObjIntConsumer<byte[]> prefixKeyConsumer) {
     if (prefixKeyBuffers.peek() == null) {
       throw new IllegalStateException(
           "Currently nested prefix iterations are not supported! This will cause unexpected behavior.");
     }
     final ExpandableArrayBuffer prefixKeyBuffer = prefixKeyBuffers.remove();
     try {
-      prefixKeyBufferConsumer.accept(prefixKeyBuffer);
+
+      prefixKeyBuffer.putLong(0, keyPrefix, ZeebeDbConstants.ZB_DB_BYTE_ORDER);
+      key.write(prefixKeyBuffer, Long.BYTES);
+      final int prefixLength = Long.BYTES + key.getLength();
+
+      prefixKeyConsumer.accept(prefixKeyBuffer.byteArray(), prefixLength);
     } finally {
       prefixKeyBuffers.add(prefixKeyBuffer);
     }

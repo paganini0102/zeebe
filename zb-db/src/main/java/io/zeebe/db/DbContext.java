@@ -7,9 +7,8 @@
  */
 package io.zeebe.db;
 
-import java.util.function.Consumer;
+import java.util.function.ObjIntConsumer;
 import org.agrona.DirectBuffer;
-import org.agrona.ExpandableArrayBuffer;
 import org.rocksdb.ColumnFamilyHandle;
 import org.rocksdb.ReadOptions;
 import org.rocksdb.RocksIterator;
@@ -18,11 +17,15 @@ import org.rocksdb.RocksIterator;
 public interface DbContext {
 
   /**
-   * Write the {@link DbKey} to the shared key buffer
+   * Write the {@link DbKey} and prefix to the shared key buffer
    *
+   * @param keyPrefix the key prefix to write
    * @param key the key to write
    */
-  void writeKey(DbKey key);
+  void writeKey(long keyPrefix, DbKey key);
+
+  /** @return the shared key length (incl. prefix) */
+  int getKeyLength();
 
   /** @return the shared key buffer array */
   byte[] getKeyBufferArray();
@@ -64,12 +67,15 @@ public interface DbContext {
   boolean isValueViewEmpty();
 
   /**
-   * Runs a consumer with a shared prefix key buffer
+   * Runs a consumer with a shared prefix key. The given prefix and key is written into a buffer and
+   * the consumer is called with the byte array and prefix length.
    *
-   * @param prefixKeyBufferConsumer consumer of the shared prefix key buffer
+   * @param keyPrefix the key prefix to write into the buffer
+   * @param key the key to write into the buffer
+   * @param prefixKeyConsumer consumer of the shared prefix key buffer
    * @throws RuntimeException if no shared prefix buffer is available at the moment
    */
-  void withPrefixKeyBuffer(Consumer<ExpandableArrayBuffer> prefixKeyBufferConsumer);
+  void withPrefixKey(long keyPrefix, DbKey key, ObjIntConsumer<byte[]> prefixKeyConsumer);
 
   /**
    * Create a new iterator on the shared transaction

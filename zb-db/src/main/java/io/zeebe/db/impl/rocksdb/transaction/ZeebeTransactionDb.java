@@ -16,7 +16,6 @@ import io.zeebe.db.DbValue;
 import io.zeebe.db.KeyValuePairVisitor;
 import io.zeebe.db.ZeebeDb;
 import io.zeebe.db.ZeebeDbException;
-import io.zeebe.db.impl.DbLong;
 import io.zeebe.db.impl.DbNil;
 import io.zeebe.db.impl.rocksdb.Loggers;
 import java.io.File;
@@ -132,17 +131,21 @@ public class ZeebeTransactionDb<ColumnFamilyNames extends Enum<ColumnFamilyNames
   //////////////////////////// GET ///////////////////////////////////
   ////////////////////////////////////////////////////////////////////
 
-  protected void put(final DbContext context, final DbKey key, final DbValue value) {
+  protected void put(
+      final DbContext context,
+      final ColumnFamilyNames columnFamilyName,
+      final DbKey key,
+      final DbValue value) {
     ensureInOpenTransaction(
         context,
         transaction -> {
-          context.writeKey(key);
+          context.writeKey(columnFamilyName.ordinal(), key);
           context.writeValue(value);
 
           transaction.put(
               defaultNativeHandle,
               context.getKeyBufferArray(),
-              key.getLength(),
+              context.getKeyLength(),
               context.getValueBufferArray(),
               value.getLength());
         });
@@ -154,13 +157,13 @@ public class ZeebeTransactionDb<ColumnFamilyNames extends Enum<ColumnFamilyNames
         () -> operation.run((ZeebeTransaction) context.getCurrentTransaction()));
   }
 
-  protected DirectBuffer get(final DbContext context, final DbKey key) {
-    context.writeKey(key);
-    final int keyLength = key.getLength();
-    return getValue(context, keyLength);
+  protected DirectBuffer get(
+      final DbContext context, final ColumnFamilyNames columnFamilyName, final DbKey key) {
+    context.writeKey(columnFamilyName.ordinal(), key);
+    return getValue(context);
   }
 
-  private DirectBuffer getValue(final DbContext context, final int keyLength) {
+  private DirectBuffer getValue(final DbContext context) {
     ensureInOpenTransaction(
         context,
         transaction -> {
@@ -169,7 +172,7 @@ public class ZeebeTransactionDb<ColumnFamilyNames extends Enum<ColumnFamilyNames
                   defaultNativeHandle,
                   getNativeHandle(defaultReadOptions),
                   context.getKeyBufferArray(),
-                  keyLength);
+                  context.getKeyLength());
           context.wrapValueView(value);
         });
     return context.getValueView();
@@ -190,24 +193,27 @@ public class ZeebeTransactionDb<ColumnFamilyNames extends Enum<ColumnFamilyNames
   //////////////////////////// ITERATION /////////////////////////////
   ////////////////////////////////////////////////////////////////////
 
-  protected boolean exists(final DbContext context, final DbKey key) {
+  protected boolean exists(
+      final DbContext context, final ColumnFamilyNames columnFamilyName, final DbKey key) {
     context.wrapValueView(new byte[0]);
     ensureInOpenTransaction(
         context,
         transaction -> {
-          context.writeKey(key);
-          getValue(context, key.getLength());
+          context.writeKey(columnFamilyName.ordinal(), key);
+          getValue(context);
         });
     return !context.isValueViewEmpty();
   }
 
-  protected void delete(final DbContext context, final DbKey key) {
-    context.writeKey(key);
+  protected void delete(
+      final DbContext context, final ColumnFamilyNames columnFamilyName, final DbKey key) {
+    context.writeKey(columnFamilyName.ordinal(), key);
 
     ensureInOpenTransaction(
         context,
         transaction ->
-            transaction.delete(defaultNativeHandle, context.getKeyBufferArray(), key.getLength()));
+            transaction.delete(
+                defaultNativeHandle, context.getKeyBufferArray(), context.getKeyLength()));
   }
 
   ////////////////////////////////////////////////////////////////////
@@ -219,15 +225,15 @@ public class ZeebeTransactionDb<ColumnFamilyNames extends Enum<ColumnFamilyNames
   }
 
   protected <KeyType extends DbKey, ValueType extends DbValue> void whileEqualPrefix(
-      final DbLong columnFamilyKey,
       final DbContext context,
+      final ColumnFamilyNames columnFamilyName,
       final DbKey prefix,
       final KeyType keyInstance,
       final ValueType valueInstance,
       final BiConsumer<KeyType, ValueType> visitor) {
     whileEqualPrefix(
-        columnFamilyKey,
         context,
+        columnFamilyName,
         prefix,
         keyInstance,
         valueInstance,
@@ -242,14 +248,14 @@ public class ZeebeTransactionDb<ColumnFamilyNames extends Enum<ColumnFamilyNames
    * which are prefixed with column family key.
    */
   protected <KeyType extends DbKey, ValueType extends DbValue> void whileEqualPrefix(
-      final DbLong columnFamilyKey,
       final DbContext context,
+      final ColumnFamilyNames columnFamilyName,
       final KeyType keyInstance,
       final ValueType valueInstance,
       final BiConsumer<KeyType, ValueType> visitor) {
     whileEqualPrefix(
-        columnFamilyKey,
         context,
+        columnFamilyName,
         new DbNullKey(),
         keyInstance,
         valueInstance,
@@ -264,13 +270,13 @@ public class ZeebeTransactionDb<ColumnFamilyNames extends Enum<ColumnFamilyNames
    * which are prefixed with column family key.
    */
   protected <KeyType extends DbKey, ValueType extends DbValue> void whileEqualPrefix(
-      final DbLong columnFamilyKey,
       final DbContext context,
+      final ColumnFamilyNames columnFamilyName,
       final KeyType keyInstance,
       final ValueType valueInstance,
       final KeyValuePairVisitor<KeyType, ValueType> visitor) {
     whileEqualPrefix(
-        columnFamilyKey, context, new DbNullKey(), keyInstance, valueInstance, visitor);
+        context, columnFamilyName, new DbNullKey(), keyInstance, valueInstance, visitor);
   }
 
   /**
@@ -283,40 +289,29 @@ public class ZeebeTransactionDb<ColumnFamilyNames extends Enum<ColumnFamilyNames
    * <p>While iterating over subsequent keys we have to validate it.
    */
   protected <KeyType extends DbKey, ValueType extends DbValue> void whileEqualPrefix(
-      final DbLong columnFamilyKey,
       final DbContext context,
+      final ColumnFamilyNames columnFamilyName,
       final DbKey prefix,
       final KeyType keyInstance,
       final ValueType valueInstance,
       final KeyValuePairVisitor<KeyType, ValueType> visitor) {
-    context.withPrefixKeyBuffer(
-        prefixKeyBuffer ->
+    context.withPrefixKey(
+        columnFamilyName.ordinal(),
+        prefix,
+        (prefixKey, prefixLength) ->
             ensureInOpenTransaction(
                 context,
                 transaction -> {
                   try (final RocksIterator iterator = newIterator(context, prefixReadOptions)) {
 
-                    columnFamilyKey.write(prefixKeyBuffer, 0);
-                    prefix.write(prefixKeyBuffer, Long.BYTES);
-                    final int prefixLength = Long.BYTES + prefix.getLength();
-
                     boolean shouldVisitNext = true;
 
                     for (RocksDbInternal.seek(
-                            iterator,
-                            getNativeHandle(iterator),
-                            prefixKeyBuffer.byteArray(),
-                            prefixLength);
+                            iterator, getNativeHandle(iterator), prefixKey, prefixLength);
                         iterator.isValid() && shouldVisitNext;
                         iterator.next()) {
                       final byte[] keyBytes = iterator.key();
-                      if (!startsWith(
-                          prefixKeyBuffer.byteArray(),
-                          0,
-                          prefixLength,
-                          keyBytes,
-                          0,
-                          keyBytes.length)) {
+                      if (!startsWith(prefixKey, 0, prefixLength, keyBytes, 0, keyBytes.length)) {
                         break;
                       }
 
@@ -346,13 +341,12 @@ public class ZeebeTransactionDb<ColumnFamilyNames extends Enum<ColumnFamilyNames
     return iteratorConsumer.visit(keyInstance, valueInstance);
   }
 
-  public boolean isEmpty(final long columnFamilyKey, final DbContext context) {
-    final var columnKey = new DbLong();
-    columnKey.wrapLong(columnFamilyKey);
+  @Override
+  public boolean isEmpty(final ColumnFamilyNames columnFamilyName, final DbContext context) {
     final AtomicBoolean isEmpty = new AtomicBoolean(true);
     whileEqualPrefix(
-        columnKey,
         context,
+        columnFamilyName,
         DbNullKey.INSTANCE,
         DbNil.INSTANCE,
         (key, value) -> {
@@ -360,11 +354,6 @@ public class ZeebeTransactionDb<ColumnFamilyNames extends Enum<ColumnFamilyNames
           return false;
         });
     return isEmpty.get();
-  }
-
-  @Override
-  public boolean isEmpty(final ColumnFamilyNames columnFamilyName, final DbContext context) {
-    return isEmpty(columnFamilyName.ordinal(), context);
   }
 
   @Override

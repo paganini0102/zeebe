@@ -12,8 +12,6 @@ import io.zeebe.db.DbContext;
 import io.zeebe.db.DbKey;
 import io.zeebe.db.DbValue;
 import io.zeebe.db.KeyValuePairVisitor;
-import io.zeebe.db.impl.DbCompositeKey;
-import io.zeebe.db.impl.DbLong;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
@@ -28,10 +26,9 @@ class TransactionalColumnFamily<
   private final ZeebeTransactionDb<ColumnFamilyNames> transactionDb;
   private final DbContext context;
 
-  private final DbCompositeKey<DbLong, KeyType> compositeKey;
   private final ValueType valueInstance;
   private final KeyType keyInstance;
-  private final DbLong columnFamilyKey;
+  private final ColumnFamilyNames columnFamilyName;
 
   TransactionalColumnFamily(
       final ZeebeTransactionDb<ColumnFamilyNames> transactionDb,
@@ -43,9 +40,7 @@ class TransactionalColumnFamily<
     this.context = context;
     this.keyInstance = keyInstance;
     this.valueInstance = valueInstance;
-    columnFamilyKey = new DbLong();
-    columnFamilyKey.wrapLong(columnFamily.ordinal());
-    compositeKey = new DbCompositeKey<>(columnFamilyKey, keyInstance);
+    columnFamilyName = columnFamily;
   }
 
   @Override
@@ -55,7 +50,7 @@ class TransactionalColumnFamily<
 
   @Override
   public void put(final DbContext context, final KeyType key, final ValueType value) {
-    transactionDb.put(context, compositeKey, value);
+    transactionDb.put(context, columnFamilyName, key, value);
   }
 
   @Override
@@ -65,7 +60,7 @@ class TransactionalColumnFamily<
 
   @Override
   public ValueType get(final DbContext context, final KeyType key, final ValueType value) {
-    final DirectBuffer valueBuffer = transactionDb.get(context, compositeKey);
+    final DirectBuffer valueBuffer = transactionDb.get(context, columnFamilyName, key);
     if (valueBuffer != null) {
 
       value.wrap(valueBuffer, 0, valueBuffer.capacity());
@@ -95,7 +90,7 @@ class TransactionalColumnFamily<
       final KeyValuePairVisitor<KeyType, ValueType> visitor,
       final KeyType key,
       final ValueType value) {
-    transactionDb.whileEqualPrefix(columnFamilyKey, context, key, value, visitor);
+    transactionDb.whileEqualPrefix(context, columnFamilyName, key, value, visitor);
   }
 
   @Override
@@ -117,7 +112,7 @@ class TransactionalColumnFamily<
 
   @Override
   public void delete(final DbContext context, final KeyType key) {
-    transactionDb.delete(context, compositeKey);
+    transactionDb.delete(context, columnFamilyName, key);
   }
 
   @Override
@@ -134,8 +129,8 @@ class TransactionalColumnFamily<
   public boolean isEmpty(final DbContext context) {
     final AtomicBoolean isEmpty = new AtomicBoolean(true);
     transactionDb.whileEqualPrefix(
-        columnFamilyKey,
         context,
+        columnFamilyName,
         keyInstance,
         valueInstance,
         (key, value) -> {
@@ -151,20 +146,20 @@ class TransactionalColumnFamily<
 
   public void forEach(final DbContext context, final Consumer<ValueType> consumer) {
     transactionDb.whileEqualPrefix(
-        columnFamilyKey,
         context,
+        columnFamilyName,
         keyInstance,
         valueInstance,
         (BiConsumer<KeyType, ValueType>) (ignore, value) -> consumer.accept(value));
   }
 
   public void forEach(final DbContext context, final BiConsumer<KeyType, ValueType> consumer) {
-    transactionDb.whileEqualPrefix(columnFamilyKey, context, keyInstance, valueInstance, consumer);
+    transactionDb.whileEqualPrefix(context, columnFamilyName, keyInstance, valueInstance, consumer);
   }
 
   public void whileTrue(
       final DbContext context, final KeyValuePairVisitor<KeyType, ValueType> visitor) {
-    transactionDb.whileEqualPrefix(columnFamilyKey, context, keyInstance, valueInstance, visitor);
+    transactionDb.whileEqualPrefix(context, columnFamilyName, keyInstance, valueInstance, visitor);
   }
 
   public void whileEqualPrefix(
@@ -172,7 +167,7 @@ class TransactionalColumnFamily<
       final DbKey keyPrefix,
       final BiConsumer<KeyType, ValueType> visitor) {
     transactionDb.whileEqualPrefix(
-        columnFamilyKey, context, keyPrefix, keyInstance, valueInstance, visitor);
+        context, columnFamilyName, keyPrefix, keyInstance, valueInstance, visitor);
   }
 
   public void whileEqualPrefix(
@@ -180,10 +175,10 @@ class TransactionalColumnFamily<
       final DbKey keyPrefix,
       final KeyValuePairVisitor<KeyType, ValueType> visitor) {
     transactionDb.whileEqualPrefix(
-        columnFamilyKey, context, keyPrefix, keyInstance, valueInstance, visitor);
+        context, columnFamilyName, keyPrefix, keyInstance, valueInstance, visitor);
   }
 
   public boolean exists(final DbContext context, final KeyType key) {
-    return transactionDb.exists(context, compositeKey);
+    return transactionDb.exists(context, columnFamilyName, key);
   }
 }
